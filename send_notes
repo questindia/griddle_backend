@@ -1,0 +1,283 @@
+#!/usr/bin/perl
+
+use DBI;
+
+$now = time();
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+# Will need to find a more effecient way to do this but for now this will work
+
+$stk = $dbh->prepare("SELECT * FROM notification_settings");
+$stk->execute;
+while(($nuid, $fg, $fp, $ff, $fgc, $fpc) = $stk->fetchrow_array) {
+
+   $FG{$nuid} = $fg;
+   $FP{$nuid} = $fp;
+   $FF{$nuid} = $ff;
+   $FGC{$nuid} = $fgc;
+   $FPC{$nuid} = $fpc;
+}
+$stk->finish;
+
+# Grab the next nid
+$stk = $dbh->prepare("SELECT nid FROM notes ORDER BY nid DESC LIMIT 1");
+$stk->execute;
+($nid) = $stk->fetchrow_array;
+$stk->finish;
+$nid++;
+
+
+# Figure out what happened = only process push=0 and type=1 (post)
+
+$sth = $dbh->prepare("SELECT * FROM triggers WHERE push=0 AND type=1");
+$sth->execute;
+
+while(($tid, $gid, $pid, $uid, $type, $din, $status, $email) = $sth->fetchrow_array) {
+
+   # get a list of people who care about this gid, pid or uid
+   %fgrids = &getGridFollowers($gid);
+   %fpeople = &getPeopleFollowers($uid);
+   %ffriends = &getFriendFollowers($uid);
+   # Get some information to include in the email
+   %pdata = &getPostInfo($pid, $gid, $uid);
+
+
+
+   foreach $person (keys %fgrids) {
+      $dkey = "$person-$tid";      
+      next if $person == $uid; # Don't send someone a notification about something they did
+      next if $DONE{$dkey};  # this person has already been alerted about this
+      next if !$FG{$person}; # Doesn't want to get alerts on this
+      &do_note($person, $uid, "$pdata{'name'} posted on <a href=/m/grid.php?gid=$gid>$pdata{'topic'}</a>", 3, $pid, 0);
+      $DONE{$dkey} = 1;
+   }
+
+   foreach $person (keys %fpeople) {
+      $dkey = "$person-$tid";
+      next if $person == $uid;
+      next if $DONE{$dkey}; # this person has already been alerted about this
+      next if !$FP{$person}; # Doesn't want to get alerts on this
+      &do_note($person, $uid, "$pdata{'name'} posted on <a href=/m/grid.php?gid=$gid>$pdata{'topic'}</a>", 3, $pid, 0);
+      $DONE{$dkey} = 1;
+   }
+
+   foreach $person (keys %ffriends) {
+      $dkey = "$person-$tid";
+      next if $person == $uid;
+      next if $DONE{$dkey}; # this person has already been alerted about this
+      next if !$FF{$person}; # Doesn't want to get alerts on this
+      &do_note($person, $uid, "$pdata{'name'} posted on <a href=/m/grid.php?gid=$gid>$pdata{'topic'}</a>", 3, $pid, 0);
+      $DONE{$dkey} = 1;
+   }
+
+   $stk = $dbh->prepare("UPDATE triggers SET push=1 WHERE tid=$tid");
+   $stk->execute;
+   $stk->finish;
+
+}
+$sth->finish;
+
+
+# Now get the comments
+
+$sth = $dbh->prepare("SELECT * FROM triggers WHERE push=0 AND type=2");
+$sth->execute;
+while(($tid, $gid, $pid, $uid, $type, $din, $status) = $sth->fetchrow_array) {
+
+   # First see who may be interested in this
+   %users = &getPostFollowers($pid);
+   %pdata = &getPostInfo($pid, $gid, $uid);
+   ($message, $cid) = &getLastCommInfo($pid, $uid);
+
+   $message = substr($message, 0, 100);
+
+   foreach $person (keys %users) {
+      $dkey = "$person-$tid";
+      next if $person == $uid; # Don't send someone a notification about something they did
+      next if $DONE{$dkey};  # this person has already been alerted about this
+      next if !$FPC{$person}; # Doesn't want to get alerts on this
+
+      $buildmsg = "<strong>$pdata{'name'}</strong> commented <a style='color:#0088cc;' href=/m/grid.php?gid=$gid>$pdata{'topic'}</a> - $message";
+
+      &do_note($person, $uid, "<strong>$pdata{'name'}</strong> commented <a style='color:#0088cc;' href=/m/grid.php?gid=$gid>$pdata{'topic'}</a> - $message", 4, $pid, $cid);
+      $DONE{$dkey} = 1;
+
+   }   
+
+   $stk = $dbh->prepare("UPDATE triggers SET push=1 WHERE tid=$tid");
+   $stk->execute;
+   $stk->finish;
+
+
+}
+$sth->finish;
+
+
+sub do_note() {
+
+    my($target, $sender, $note, $type, $pid, $cid) = @_;
+
+    $note =~ s/\n//g;
+    $note =~ s/\r//g;
+
+    $stk = $dbh->prepare("INSERT INTO notes VALUES($nid, $target, $pid, $cid, $sender, $type, $now, \"$note\", 1)");
+    $stk->execute;
+    $stk->finish;
+
+    $nid++;
+}
+
+
+sub getUserData() {
+    my($uid) = @_;
+
+    $stk = $dbh->prepare("SELECT username, name, email FROM users WHERE uid=$uid");
+    $stk->execute;
+    my($user, $name, $email) = $stk->fetchrow_array;
+    $stk->finish;
+
+    $return{"username"} = $user;
+    $return{"name"} = $name;
+    $return{"email"} = $email;
+
+    return %return;
+}
+
+sub getLastCommInfo() {
+    my($pid, $uid) = @_;
+
+    $stk = $dbh->prepare("SELECT comment, cid FROM comments WHERE pid=$pid AND uid=$uid ORDER BY din DESC LIMIT 1");
+    $stk->execute;
+    ($message, $tcid) = $stk->fetchrow_array;
+    $stk->finish;
+
+    return ($message, $tcid);
+
+}
+
+
+sub getPostInfo() {
+    my($pid, $gid, $uid) = @_;
+
+    $stk = $dbh->prepare("SELECT message, images FROM posts WHERE pid=$pid");
+    $stk->execute;
+    ($message, $images) = $stk->fetchrow_array;
+    $stk->finish;
+
+    $stk = $dbh->prepare("SELECT name FROM users WHERE uid=$uid");
+    $stk->execute;
+    ($name) = $stk->fetchrow_array;
+    $stk->finish;
+
+    $stk = $dbh->prepare("SELECT topic FROM griddles WHERE gid=$gid");
+    $stk->execute;
+    ($topic) = $stk->fetchrow_array;
+    $stk->finish;
+
+    $return{"message"} = $message;
+    $return{"images"} = $images;
+    $return{"name"} = $name;
+    $return{"topic"} = $topic;
+
+    return %return;
+
+}
+
+
+sub getGridFollowers() {
+    my($gid) = @_;
+   
+    # Get uids that are following this grid
+ 
+    my(%return);
+
+    $stk = $dbh->prepare("SELECT uid FROM follows WHERE gid=$gid");
+    $stk->execute;
+    while(($guid) = $stk->fetchrow_array) {
+         $return{$guid} = 1;
+    }
+    $stk->execute;
+
+    return %return;
+}
+
+sub getPeopleFollowers() {
+    
+     my($uid) = @_;
+
+    # get uids that are following this person
+
+    my(%return);
+
+    $stk = $dbh->prepare("SELECT uid FROM relations WHERE target=$uid AND follower=1");
+    $stk->execute;
+    while(($ruid) = $stk->fetchrow_array) {
+         $return{$ruid} = 1;
+    }
+    $stk->execute;
+
+    return %return;
+}
+
+sub getFriendFollowers() {
+
+     my($uid) = @_;
+
+     my(%return);
+
+     $stk = $dbh->prepare("SELECT uid FROM relations WHERE target=$uid AND friend=1");
+     $stk->execute;
+     while(($ruid) = $stk->fetchrow_array) {
+         $return{$ruid} = 1;
+     }
+     $stk->execute;
+
+     return %return;
+
+}
+
+
+sub getPostFollowers() {
+    
+    my($pid) = @_;
+
+    my(%return);  
+
+    # get uids that have been involved in this post
+ 
+    $stk = $dbh->prepare("SELECT uid FROM posts WHERE pid=$pid");
+    $stk->execute;
+    while(($puid) = $stk->fetchrow_array) {
+         $return{$puid} = 1;
+    }
+    $stk->execute;
+
+    $stk = $dbh->prepare("SELECT uid FROM comments WHERE pid=$pid");
+    $stk->execute;
+    while(($puid) = $stk->fetchrow_array) {
+         $return{$puid} = 1;
+    }
+    $stk->execute;
+
+    return %return;
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

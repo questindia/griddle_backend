@@ -1,0 +1,36 @@
+#!/usr/bin/perl
+
+use DBI;
+
+chdir("/tmp");
+
+$now = time();
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+# Will need to find a more effecient way to do this but for now this will work
+
+$sth = $dbh->prepare("DELETE FROM linkages");
+$sth->execute;
+$sth->finish;
+
+$stk = $dbh->prepare("SELECT gid, linkages FROM griddles WHERE type=3");
+$stk->execute;
+
+while(($gid, $linkages) = $stk->fetchrow_array) {
+
+    @links = split(/\s+/, $linkages);
+    
+    foreach $topic (@links) {
+       $std = $dbh->prepare("SELECT gid FROM griddles WHERE topic='$topic'");
+       $std->execute;
+       while(($linked) = $std->fetchrow_array) {
+           $stb = $dbh->prepare("INSERT INTO linkages VALUES(DEFAULT, $gid, $linked)");
+           $stb->execute;
+           $stb->finish;
+       }
+    }
+}
+$stk->finish;
+
+$dbh->disconnect;

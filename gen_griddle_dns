@@ -1,0 +1,41 @@
+#!/usr/bin/perl
+
+use DBI;
+
+$now = time();
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+# Will need to find a more effecient way to do this but for now this will work
+
+$stk = $dbh->prepare("SELECT username FROM users WHERE status=1");
+$stk->execute;
+while(($username) = $stk->fetchrow_array) {
+   $OUT .= "$username		IN	CNAME	images.griddle.com.\n";
+}
+$stk->finish;
+
+$stk = $dbh->prepare("SELECT topic FROM griddles WHERE status=1");
+$stk->execute;
+while(($topic) = $stk->fetchrow_array) {
+
+  $topic =~ s/#//g;
+
+  $OUT .= "$topic		IN	CNAME	images.griddle.com.\n";
+
+}
+$stk->finish;
+
+$HEAD = `cat /etc/bind/db.griddle.com.head`;
+
+open(OUT, "> /etc/bind/db.griddle.com");
+
+print OUT $HEAD;
+print OUT $OUT;
+
+close(OUT);
+
+$dbh->disconnect;
+
+`killall -HUP named`;
+

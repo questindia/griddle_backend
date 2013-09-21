@@ -1,0 +1,31 @@
+#!/usr/bin/perl
+
+use DBI;
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+$sth = $dbh->prepare("SELECT uid, gid FROM posts");
+
+$sth->execute;
+
+while(($uid, $gid) = $sth->fetchrow_array) {
+       $COUNTS{$gid}++;
+       $UCOUNTS{$uid}++;
+}
+$sth->finish;
+
+foreach $gid (keys %COUNTS) {
+   
+   $sth = $dbh->prepare("UPDATE griddles SET posts=$COUNTS{$gid} WHERE gid=$gid");
+   $sth->execute;
+
+}
+$sth->finish;
+
+foreach $uid (keys %UCOUNTS) {
+   $sth = $dbh->prepare("UPDATE users SET posts=$UCOUNTS{$uid} WHERE uid=$uid");
+   $sth->execute;
+}
+
+$dbh->disconnect;
+

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+CONTENT=`/bin/cat $1`
+
+/usr/bin/curl https://sendgrid.com/api/mail.send.json \
+-F to=$2 -F toname="$3" -F subject="$4" \
+--form-string html="${CONTENT}" \
+-F from=griddle@griddle.com -F api_user=ecksboy -F api_key="D0d0b1rd!" \

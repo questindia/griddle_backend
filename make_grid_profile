@@ -1,0 +1,36 @@
+#!/usr/bin/perl
+
+($uid, $user, $filelist) = @ARGV;
+
+$PATH = "/var/sites/turknettlabs.com/public/griddle_images";
+$PROF = "/var/sites/turknettlabs.com/public/griddle_profiles";
+$GPATH = "/var/sites/turknettlabs.com/public/griddles";
+$PPATH = "/var/sites/turknettlabs.com/public/grid_profiles";
+
+
+
+
+#$filelist = `/bin/ls -t $PATH/$uid-*-*-* | /usr/bin/head -n 5`;
+
+# First make the cropped 1x3
+(@files) = split(/\s+/, $filelist);
+
+    
+
+`/usr/bin/convert -crop 150x150+0+0 -border 5x5 $PATH/$files[1] $PATH/$files[0] $PATH/$files[4] +append $PPATH/$uid-1.jpg`;
+
+# Now make the cropped 1x2
+`/usr/bin/convert -crop 150x150+0+0 -border 5x5 $PATH/$files[3] $PATH/$files[2] -append $PPATH/$uid-2.jpg`;
+
+# Now make the cropped Profile pic (1x1)
+`/usr/bin/convert -scale 400x400 -crop 305x305+20+20 -border 5x5 $PROF/$user $PPATH/$uid-3.jpg`;
+
+# Now append the 1x1 and 1x2
+`/usr/bin/convert $PPATH/$uid-3.jpg $PPATH/$uid-2.jpg +append $PPATH/$uid-4.jpg`;
+
+# Now append the 1x1+1x2 with the 1x3
+`/usr/bin/convert $PPATH/$uid-1.jpg $PPATH/$uid-4.jpg -append $PPATH/$user`;
+
+
+`/bin/rm $PPATH/$uid-1.jpg $PPATH/$uid-2.jpg $PPATH/$uid-3.jpg $PPATH/$uid-4.jpg`;
+

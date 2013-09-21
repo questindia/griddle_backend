@@ -1,0 +1,407 @@
+#!/usr/bin/perl
+
+use DBI;
+
+chdir("/tmp");
+
+$now = time();
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+# Will need to find a more effecient way to do this but for now this will work
+
+$stk = $dbh->prepare("SELECT uid, mobile, name FROM users WHERE mobileopt=1");
+$stk->execute;
+while(($ouid, $mobile, $name) = $stk->fetchrow_array) {
+   $OPTIN{$ouid} = 1;
+   $MOB{$ouid} = $mobile;
+   $NAMES{$ouid} = $name;
+}
+$stk->finish;
+
+
+
+
+# Get the next eid
+$stk = $dbh->prepare("SELECT eid FROM expects ORDER BY eid DESC LIMIT 1");
+$stk->execute;
+($eid) = $stk->fetchrow_array;
+$stk->finish;
+$eid++;
+
+# Find open triggers and start processing them.
+$sth = $dbh->prepare("SELECT * FROM triggers WHERE status=0");
+$sth->execute;
+
+while(($tid, $gid, $pid, $uid, $type) = $sth->fetchrow_array) {
+
+      &logit( "Processing triger - $tid | type - $type");
+
+      if($type == 1) { # This is a new post on the grid
+
+         # Go ahead and grab the image and the text
+         $stk = $dbh->prepare("SELECT message, images FROM posts WHERE pid=$pid");
+         $stk->execute;
+         ($message, $image) = $stk->fetchrow_array;
+         $stk->finish;
+
+         # Hate this - need to fix
+         `ln -s /var/sites/turknettlabs.com/public/mid_images/$image /var/sites/turknettlabs.com/public/mid_images/$image.jpg`; 
+
+         &logit("This is a post");
+         &process_post($message, $image, $uid, $pid, $gid);          
+
+
+      } elsif($type == 2) { # This is a comment
+
+         # Go ahead and grab the image and the text
+         $stk = $dbh->prepare("SELECT images FROM posts WHERE pid=$pid");
+         $stk->execute;
+         ($image) = $stk->fetchrow_array;
+         $stk->finish;
+
+         # Hate this - need to fix
+         `ln -s /var/sites/turknettlabs.com/public/mid_images/$image /var/sites/turknettlabs.com/public/mid_images/$image.jpg`; 
+
+         $stk = $dbh->prepare("SELECT comment FROM comments WHERE pid=$pid AND uid=$uid ORDER BY din DESC LIMIT 1");
+         $stk->execute;
+         ($message) = $stk->fetchrow_array;
+         $stk->finish;
+         &logit("This is a comment");
+         &process_comment($message, $image, $uid, $pid, $gid);
+
+      }
+
+
+      &logit( "Closing Trigger $tid");
+      # Now close this trigger
+      $stk = $dbh->prepare("UPDATE triggers SET status=1 WHERE tid=$tid");
+      $stk->execute;
+      $stk->finish;
+
+
+}
+$sth->finish;
+
+# Get grid invitations and process them
+
+$sth = $dbh->prepare("SELECT * FROM mms_follows WHERE status=1");
+$sth->execute;
+while(($muid, $mgid) = $sth->fetchrow_array) {
+   &process_invite($muid, $mgid);
+   $stv = $dbh->prepare("UPDATE mms_follows SET status=2 WHERE uid=$muid AND gid=$mgid");
+   $stv->execute;
+   $stv->finish;
+}
+$sth->finish;
+
+$sth = $dbh->prepare("SELECT * FROM mms_inform WHERE status=0");
+$sth->execute;
+while(($iid, $iuid, $imess) = $sth->fetchrow_array) {
+   &process_inform($iuid, $imess);
+   $stv = $dbh->prepare("UPDATE mms_inform SET status=1 WHERE iid=$iid");
+   $stv->execute;
+   $stv->finish;
+}
+$sth->finish;
+
+$sth = $dbh->prepare("SELECT * FROM mms_lasts WHERE status=0");
+$sth->execute;
+while(($lid, $iuid, $igid) = $sth->fetchrow_array) {
+   &process_last($iuid, $igid);
+   $stv = $dbh->prepare("UPDATE mms_lasts SET status=1 WHERE lid=$lid");
+   $stv->execute;
+   $stv->finish;
+}
+$sth->finish;
+
+$sth = $dbh->prepare("SELECT * FROM mms_lists WHERE status=0");
+$sth->execute;
+while(($lid, $iuid) = $sth->fetchrow_array) {
+   &process_list($iuid, $igid);
+   $stv = $dbh->prepare("UPDATE mms_lists SET status=1 WHERE lid=$lid");
+   $stv->execute;
+   $stv->finish;
+}
+$sth->finish;
+
+$dbh->disconnect;
+
+
+sub process_comment() {
+      my($message, $image, $uid, $pid, $gid) = @_;
+      
+      %followers = &getPostFollowers($pid);
+
+      foreach $puid (keys %followers) {
+
+         &logit ("Processing Event for uid=$puid");
+
+         $stk = $dbh->prepare("SELECT * FROM notification_settings WHERE uid=$puid");
+         $stk->execute;
+         ($x, $fg, $fp, $ff, $fgc, $fpc) = $stk->fetchrow_array;
+         $stk->finish;
+
+         next if !$OPTIN{$puid}; # Don't send if the user has not opted in to MMS alerts
+         next if($puid == $uid); # Don't send the user their own notification
+         next if(!$MOB{$puid}); # Don't send if the user never gave us a mobile number
+         next if(!$fpc); # Don't send if the user specifically says they don't want alerts on comments on posts they're involved with
+                  
+         
+
+         $mobile = $MOB{$puid};
+         $name = $NAMES{$uid};
+         
+         $full_message = "$name comments - $message";         
+
+         $full_message =~ s/\s+/%20/g;
+         $full_message =~ s/\n//g;
+
+         &logit("Going to send notification from $name to  $mobile $puid");
+         &logit("name = $name|mobile = $mobile|message = $message|image = $image");
+
+         # Send the notification to this user
+         system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&content_url=http://www.turknettlabs.com/mid_images/$image.jpg&format=json' -q");
+
+         # Clear out any previous expects that this user had
+         $std = $dbh->prepare("UPDATE expects SET status=3 WHERE uid=$puid");
+         $std->execute;
+         $std->finish;
+ 
+         # Set an expect up for the user to respond
+         $std = $dbh->prepare("INSERT INTO expects VALUES($eid, $gid, $pid, $puid, $now, 1)");
+         $std->execute;
+         $std->finish;
+         $eid++;
+
+
+      }
+
+
+
+
+}
+
+sub getPostFollowers() {
+    
+    my($pid) = @_;
+
+    my(%return);  
+
+    # get uids that have been involved in this post
+ 
+    $stk = $dbh->prepare("SELECT uid FROM posts WHERE pid=$pid");
+    $stk->execute;
+    while(($puid) = $stk->fetchrow_array) {
+         $return{$puid} = 1;
+         $this_user;
+    }
+    $stk->execute;
+
+    $stk = $dbh->prepare("SELECT uid FROM comments WHERE pid=$pid");
+    $stk->execute;
+    while(($puid) = $stk->fetchrow_array) {
+         $return{$puid} = 1;
+    }
+    $stk->execute;
+
+    # Get the friends of the person who posted this.
+
+    $stk = $dbh->prepare("SELECT target FROM relations WHERE friend=2 AND uid=$this_user");
+    $stk->execute;
+    while(($puid) = $stk->fetchrow_array) {
+         $return{$puid} = 1;
+    }
+    $stk->execute;
+    return %return;
+
+}
+
+sub process_post() {
+
+      my($message, $image, $uid, $pid, $gid) = @_;
+ 
+      $stk = $dbh->prepare("SELECT topic FROM griddles WHERE gid=$gid");
+      $stk->execute;
+      ($topic) = $stk->fetchrow_array;
+      $stk->finish;
+
+      $stk = $dbh->prepare("SELECT uid FROM follows WHERE gid=$gid");
+      $stk->execute;
+     
+      while(($suid) = $stk->fetchrow_array) {
+         &logit ("Processing Event for uid=$suid");
+
+         $stb = $dbh->prepare("SELECT * FROM notification_settings WHERE uid=$suid");
+         $stb->execute;
+         ($x, $fg, $fp, $ff, $fgc, $fpc) = $stb->fetchrow_array;
+         $stb->finish;
+
+         next if !$OPTIN{$suid}; # Don't send if the user has not opted in to MMS alerts
+         next if($suid == $uid); # Don't send the user their own notification
+         next if(!$MOB{$suid}); # Don't send if the user never gave us a mobile number
+         next if(!$fg); # Don't send if the user specifically says they don't want alerts on grids
+         
+         $mobile = $MOB{$suid};
+         $name = $NAMES{$uid};
+         
+         $full_message = "$name $topic $message";         
+
+         $full_message =~ s/\s+/%20/g;
+         $full_message =~ s/'/%27/g;
+         $full_message =~ s/\n//g;
+         $full_message =~ s/#/%23/g;
+
+         &logit("name = $name|mobile = $mobile|message = $message|image = $image");
+         &logit("Encoded Message String = $full_message");
+ 
+         # Send the notification to this user
+         system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&content_url=http://www.turknettlabs.com/mid_images/$image.jpg&format=json' -q");
+
+         # Clear out any previous expects that this user had
+         $std = $dbh->prepare("UPDATE expects SET status=3 WHERE uid=$suid");
+         $std->execute;
+         $std->finish;
+ 
+         # Set an expect up for the user to respond
+         $std = $dbh->prepare("INSERT INTO expects VALUES($eid, $gid, $pid, $suid, $now, 1)");
+         $std->execute;
+         $std->finish;
+         $eid++;
+
+      }
+      $stk->finish;
+
+}
+
+sub process_invite() {
+
+    my($uid, $gid) = @_;
+    return if !$OPTIN{$uid}; # Don't send if the user has not opted in to MMS alerts
+    
+    $stv = $dbh->prepare("SELECT topic FROM griddles WHERE gid=$gid");
+    $stv->execute;
+    ($topic) = $stv->fetchrow_array;
+    $stv->finish;
+    
+    $stv = $dbh->prepare("SELECT mobile FROM users WHERE uid=$uid");
+    $stv->execute;
+    ($mobile) = $stv->fetchrow_array;
+    $stv->finish;
+   
+   
+    $message = "Do you want to follow $topic? Reply with \"Griddle !follow $topic\" to follow!";         
+
+    $full_message = $message;
+
+    $full_message =~ s/\s+/%20/g;
+    $full_message =~ s/'/%27/g;
+    $full_message =~ s/\n//g;
+    $full_message =~ s/#/%23/g;
+
+    &logit("Sending Invite for $topic|mobile = $mobile|message = $message");
+    &logit("Encoded Message String = $full_message");
+ 
+    # Send the notification to this user
+    system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&format=json' -q");
+
+}
+
+sub process_last() {
+
+    my($uid, $gid) = @_;
+    
+    return if !$OPTIN{$uid}; # Don't send if the user has not opted in to MMS alerts
+    
+    $stv = $dbh->prepare("SELECT mobile	 FROM users WHERE uid=$uid");
+    $stv->execute;
+    ($mobile) = $stv->fetchrow_array;
+    $stv->finish;
+    
+    $stv = $dbh->prepare("SELECT images, message, uid FROM posts WHERE gid=$gid AND status=1 ORDER BY din DESC LIMIT 3");
+    $stv->execute;
+    
+    &logit("Going to send last three images to $mobile");
+    
+    while(($images, $message, $puid) = $stv->fetchrow_array) {
+        &logit("  - Sending $images");
+        $sti = $dbh->prepare("SELECT name FROM users WHERE uid=$puid");
+        $sti->execute;
+        ($name) = $sti->fetchrow_array;
+        $sti->finish;
+        
+         $full_message = "$name - $message";         
+
+         $full_message =~ s/\s+/%20/g;
+         $full_message =~ s/'/%27/g;
+         $full_message =~ s/\n//g;
+         $full_message =~ s/#/%23/g;
+        `ln -s /var/sites/turknettlabs.com/public/mid_images/$images /var/sites/turknettlabs.com/public/mid_images/$images.jpg`; 
+        system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&content_url=http://www.turknettlabs.com/mid_images/$images.jpg&format=json' -q");
+    }
+    $stv->finish;
+    
+}
+
+sub process_list() {
+
+   my($uid) = @_;
+   
+   return if !$OPTIN{$uid}; # Don't send if the user has not opted in to MMS alerts
+    
+    $stv = $dbh->prepare("SELECT mobile	 FROM users WHERE uid=$uid");
+    $stv->execute;
+    ($mobile) = $stv->fetchrow_array;
+    $stv->finish;
+ 
+    $stv = $dbh->prepare("SELECT topic FROM griddles WHERE type=3 ORDER by last_post DESC LIMIT 10");
+    $stv->execute;
+    
+    while(($topic) = $stv->fetchrow_array) {
+       $gridlist .= "$topic ";
+    }
+    $stv->finish;
+    
+    $full_message = "The last 10 Grids posted to were: $gridlist";         
+
+    &logit("Sending List to $mobile - $full_message");
+
+    $full_message =~ s/\s+/%20/g;
+    $full_message =~ s/'/%27/g;
+    $full_message =~ s/\n//g;
+    $full_message =~ s/#/%23/g;
+    system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&format=json' -q");
+
+}    
+
+sub process_inform() {
+    
+    my($uid, $message) = @_;
+    
+    $stv = $dbh->prepare("SELECT mobile FROM users WHERE uid=$uid");
+    $stv->execute;
+    ($mobile) = $stv->fetchrow_array;
+    $stv->finish;
+    
+    $full_message = $message;
+    
+    $full_message =~ s/\s+/%20/g;
+    $full_message =~ s/'/%27/g;
+    $full_message =~ s/\n//g;
+    $full_message =~ s/#/%23/g;
+
+    &logit("Sending Inform|mobile = $mobile|message = $full_message");
+    &logit("Encoded Message String = $full_message");
+ 
+    # Send the notification to this user
+    system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&format=json' -q");
+
+    
+}
+   
+sub logit() {
+   ($what) = @_;
+   open(L, ">> /tmp/gen_expects.log");
+   print L "$now|$what\n";
+   close(L);
+}

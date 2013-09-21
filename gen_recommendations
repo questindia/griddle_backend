@@ -1,0 +1,104 @@
+#!/usr/bin/perl
+
+use DBI;
+
+
+#call do_linkages first
+
+`/var/sites/turknettlabs.com/sbin/do_linkages`;
+
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+$sth = $dbh->prepare("SELECT uid, username, bio FROM users");
+$sth->execute;
+
+while(($uid, $username, $interests) = $sth->fetchrow_array) {
+
+   # Grab some grids based on interests and wordcount
+
+   @stuff = split(/\s+/, $interests);
+   foreach $word (@stuff) {
+   	 $word = lc($word);
+	 $word =~ s/[^\w]//g;
+
+     $stk = $dbh->prepare("SELECT gid, count FROM wordcount WHERE word LIKE '%$word%' ORDER BY count LIMIT 5");
+     $stk->execute;
+     while(($gid, $count) = $stk->fetchrow_array) {
+     	$RECOM{$gid} += $count;
+     }
+     $stk->finish;
+
+   }
+
+   # See what the user is already following
+
+   $stk = $dbh->prepare("SELECT gid FROM follows WHERE uid=$uid");
+   $stk->execute;
+   while(($fgid) = $stk->fetchrow_array) {
+   	  $FOLLOWING{$fgid} = 1;
+   }
+   $stk->finish;
+
+   foreach $gfol (keys(%FOLLOWING)) {
+       $stk = $dbh->prepare("SELECT linkages FROM griddles WHERE gid=$gfol");
+       $stk->execute;
+       while(($linkages) = $stk->fetchrow_array) {
+          @links = split(/\s+/, $linkages);
+          foreach $link (@links) {
+             $std = $dbh->prepare("SELECT gid FROM griddles WHERE topic='$link' AND type=3");
+             $std->execute;
+             ($tryg) = $std->fetchrow_array;
+             $std->finish;
+             if(!$FOLLOWING{$tryg}) {
+                $RECOM{$tryg} += 10;
+             }
+           }
+       }
+       $stk->finish;
+       
+       $stk = $dbh->prepare("SELECT linkto FROM linkages WHERE gid=$gfol");
+       $stk->execute;
+       while(($lto) = $stk->fetchrow_array) {
+          if(!$FOLLOWING{$lto}) {
+              $RECOM{$lto} += 10;
+          }
+       }
+       $stk->finish;  
+   
+   }
+
+   # print "$username ----\n";
+
+
+   # TODO Fix this - ugly works for now
+   $stk = $dbh->prepare("DELETE FROM recommendations WHERE uid=$uid");
+   $stk->execute;
+   $stk->finish;
+
+
+   foreach $key (keys(%RECOM)) {
+
+       next if($FOLLOWING{$key});
+
+       $stk = $dbh->prepare("INSERT INTO recommendations VALUES($uid, $key, $RECOM{$key})");
+       $stk->execute;
+       $stk->finish;
+
+      # print "   $topic - $RECOM{$key}\n";
+
+   }
+
+   %RECOM = ();
+   %FOLLOWING = ();
+
+}
+$sth->finish;
+
+
+
+
+
+
+
+

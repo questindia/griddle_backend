@@ -1,0 +1,30 @@
+#!/usr/bin/perl
+
+($gid) = @ARGV;
+
+$PATH = "/var/sites/turknettlabs.com/public/griddle_images";
+$GPATH = "/var/sites/turknettlabs.com/public/griddles";
+
+@files = `/bin/ls -t $PATH/*-*-$gid-* | /usr/bin/head -n 9`;
+
+$count = 1;
+$row = 1;
+foreach $file (@files) {
+    chop $file;
+    $files{$row} .= " $file";
+    $count++;
+    if($count > 3) {
+       $count = 1;
+       $row++;
+    } 
+   
+}
+
+
+`/usr/bin/convert -crop 200x200+0+0 -border 5x5 $files{1} +append $GPATH/$gid-1.jpg`;
+`/usr/bin/convert -crop 200x200+0+0 -border 5x5 $files{2} +append $GPATH/$gid-2.jpg`;
+`/usr/bin/convert -crop 200x200+0+0 -border 5x5 $files{3} +append $GPATH/$gid-3.jpg`;
+
+`/usr/bin/convert $GPATH/$gid-1.jpg $GPATH/$gid-2.jpg $GPATH/$gid-3.jpg -append $GPATH/$gid-latest.jpg`;
+`/bin/rm $GPATH/$gid-1.jpg $GPATH/$gid-2.jpg $GPATH/$gid-3.jpg`;
+

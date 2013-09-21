@@ -1,0 +1,81 @@
+#!/usr/bin/perl
+
+use DBI;
+
+%COMMON = (''=>1, ' '=>1, 'the'=>1, 'of'=>1, 'and'=>1, 'a'=>1, 'to'=>1, 'in'=>1, 'is'=>1, 'you'=>1, 'that'=>1, 'it'=>1, 'he'=>1, 'was'=>1, 'for'=>1, 'on'=>1, 'are'=>1, 'as'=>1, 'with'=>1, 'his'=>1, 'they'=>1, 'I'=>1, 'at'=>1, 'be'=>1, 'this'=>1, 'have'=>1, 'from'=>1, 'or'=>1, 'one'=>1, 'had'=>1, 'by'=>1, 'word'=>1, 'but'=>1, 'not'=>1, 'what'=>1, 'all'=>1, 'were'=>1, 'we'=>1, 'when'=>1, 'your'=>1, 'can'=>1, 'said'=>1, 'there'=>1, 'use'=>1, 'an'=>1, 'each'=>1, 'which'=>1, 'she'=>1, 'do'=>1, 'how'=>1, 'their'=>1, 'if'=>1, 'will'=>1, 'up'=>1, 'other'=>1, 'about'=>1, 'out'=>1, 'many'=>1, 'then'=>1, 'them'=>1, 'these'=>1, 'so'=>1, 'some'=>1, 'her'=>1, 'would'=>1, 'make'=>1, 'like'=>1, 'him'=>1, 'into'=>1, 'time'=>1, 'has'=>1, 'look'=>1, 'two'=>1, 'more'=>1, 'write'=>1, 'go'=>1, 'see'=>1, 'number'=>1, 'no'=>1, 'way'=>1, 'could'=>1, 'people'=>1, 'my'=>1, 'than'=>1, 'first'=>1, 'water'=>1, 'been'=>1, 'call'=>1, 'who'=>1, 'oil'=>1, 'its'=>1, 'now'=>1, 'find'=>1, 'long'=>1, 'down'=>1, 'day'=>1, 'did'=>1, 'get'=>1, 'come'=>1, 'made'=>1, 'may'=>1, 'part'=>1 );
+
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+## Fucking ugly, I know.  It'll work for now until I can make it right
+
+$sth = $dbh->prepare("DELETE FROM wordcount");
+$sth->execute;
+$sth->finish;
+
+$sth = $dbh->prepare("SELECT gid, summary, keywords FROM griddles WHERE type=3");
+
+$sth->execute;
+
+while(($gid, $sum, $keyw) = $sth->fetchrow_array) {
+
+    
+
+    @stuff = split(/\s+/, $keyw);
+
+    foreach $word (@stuff) {
+            $word = lc($word);
+            $word =~ s/[^\w]//g;
+            next if($COMMON{$word}); # Skip a, an, the, if, etc
+            $COUNT{$word} += 100;
+    }
+
+    @stuff = split(/\s+/, $sum);
+
+    foreach $word (@stuff) {
+            $word = lc($word);
+            $word =~ s/[^\w]//g;
+            next if($COMMON{$word}); # Skip a, an, the, if, etc
+            $COUNT{$word}++;
+    }
+
+
+	$stk = $dbh->prepare("SELECT message FROM posts WHERE gid=$gid AND status=1");
+	$stk->execute;
+	while(($message) = $stk->fetchrow_array) {
+		@stuff = split(/\s+/, $message);
+		foreach $word (@stuff) {
+			$word = lc($word);
+			$word =~ s/[^\w]//g;
+			next if($COMMON{$word}); # Skip a, an, the, if, etc
+			$COUNT{$word}++;
+		}
+	}
+    $stk->finish;
+
+    $stk = $dbh->prepare("SELECT comment FROM comments WHERE gid=$gid");
+    $stk->execute;
+    while(($comment) = $stk->fetchrow_array) {
+    	@stuff = split(/\s+/, $comment);
+    	foreach $word (@stuff) {
+    		$word = lc($word);
+			$word =~ s/[^\w]//g;
+    		next if($COMMON{$word});
+    		$COUNT{$word}++;
+    	}
+    }
+    $stk->execute;
+
+    foreach $key (keys(%COUNT)) {
+       $stk = $dbh->prepare("REPLACE INTO wordcount VALUES('$key', $gid, $COUNT{$key})");
+       $stk->execute;
+       $stk->finish;
+    }
+
+    %COUNT = ();
+}
+$sth->finish;
+
+$dbh->disconnect;
+
+

@@ -1,0 +1,39 @@
+#!/usr/bin/perl
+
+use DBI;
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+$sth = $dbh->prepare("SELECT gid FROM griddles WHERE type=3");
+
+$sth->execute;
+
+while(($gid) = $sth->fetchrow_array) {
+
+    `/var/sites/turknettlabs.com/sbin/make_griddle $gid`;
+}
+$sth->finish;
+
+$sth = $dbh->prepare("SELECT uid, username FROM users");
+$sth->execute;
+while(($uid, $username) = $sth->fetchrow_array) {
+
+   $stk = $dbh->prepare("SELECT images FROM posts WHERE uid=$uid AND status=1 ORDER BY RAND() LIMIT 5");
+   $stk->execute;
+   while(($images) = $stk->fetchrow_array) {
+   	  $imgline .= "$images ";
+   }
+   chop $imgline;
+   $stk->finish;
+ 
+   print "$imgline\n";
+
+   `/var/sites/turknettlabs.com/sbin/make_grid_profile $uid $username "$imgline"`;
+
+   $imgline = "";
+}
+$sth->finish;
+
+
+$dbh->disconnect;
+

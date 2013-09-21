@@ -1,0 +1,303 @@
+#!/usr/bin/perl
+
+use DBI;
+
+$now = time();
+
+$dstamp = `/bin/date +%m/%d/%Y`;
+chop $dstamp;
+
+$IMSTYLE = "width: 60px; height:60px; background-position: center center; overflow:hidden; -moz-box-shadow: 5px 5px 6px #000; -webkit-box-shadow: 5px 5px 6px #000; box-shadow: 5px 5px 6px #000;";
+$PSTYLE = "font-size: small; color: #333;";
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+# Will need to find a more effecient way to do this but for now this will work
+
+$stk = $dbh->prepare("SELECT * FROM notification_settings");
+$stk->execute;
+while(($nuid, $fg, $fp, $ff, $fgc, $fpc) = $stk->fetchrow_array) {
+
+   $FG{$nuid} = $fg;
+   $FP{$nuid} = $fp;
+   $FF{$nuid} = $ff;
+   $FGC{$nuid} = $fgc;
+   $FPC{$nuid} = $fpc;
+}
+$stk->finish;
+
+$stk = $dbh->prepare("SELECT uid, emailopt FROM users");
+$stk->execute;
+while(($euid, $em) = $stk->fetchrow_array) {
+   $EM{$euid} = $em;
+}
+$stk->finish;
+
+# Figure out what happened = only process email=0
+
+$sth = $dbh->prepare("SELECT * FROM triggers WHERE email=0 AND type=1");
+$sth->execute;
+
+while(($tid, $gid, $pid, $uid, $type, $din, $status, $email) = $sth->fetchrow_array) {
+
+   # get a list of people who care about this gid, pid or uid
+   %fgrids = &getGridFollowers($gid);
+   %fpeople = &getPeopleFollowers($uid);
+   %ffriends = &getFriendFollowers($uid);
+   # Get some information to include in the email
+   %pdata = &getPostInfo($pid, $gid, $uid);
+   $strip = $pdata{'topic'};   
+   $strip =~ s/#//g;
+
+   foreach $person (keys %fgrids) {
+      $dkey = "$person-$tid";
+      next if !$EM{$person}; # Don't send email to this user
+      next if $person == $uid; # Don't send someone a notification about something they did
+      next if $DONE{$dkey};  # this person has already been alerted about this
+      next if !$FG{$person}; # Doesn't want to get alerts on this
+      $EMAIL{$person} .= "<table width=90% border=0 cellpadding=5 style='background-color: white;'><tr><td align=left width=45><img style='$IMSTYLE' src=http://www.turknettlabs.com/griddle_images/$pdata{'images'}></td><td align=left valign=top><p style='$PSTYLE'>$pdata{'name'} writes on <a href='http://$strip.griddle.com'>$pdata{'topic'}</a>:<br>$pdata{'message'}</p></td></tr></table><hr>\n";
+      $DONE{$dkey} = 1;
+   }
+
+   foreach $person (keys %fpeople) {
+      $dkey = "$person-$tid";
+      next if !$EM{$person}; # Don't send email to this user
+      next if $person == $uid;
+      next if $DONE{$dkey}; # this person has already been alerted about this
+      next if !$FP{$person}; # Doesn't want to get alerts on this
+      $EMAIL{$person} .= "<table width=90% border=0 cellpadding=5 style='background-color: white;'><tr><td align=left width=45><img style='$IMSTYLE' src=http://www.turknettlabs.com/griddle_images/$pdata{'images'}></td><td align=left valign=top><p style='$PSTYLE'>$pdata{'name'} writes on <a href='http://$strip.griddle.com'>$pdata{'topic'}</a>:<br>$pdata{'message'}</p></td></tr></table><hr>\n";
+      $DONE{$dkey} = 1;
+   }
+
+   foreach $person (keys %ffriends) {
+      $dkey = "$person-$tid";
+      next if !$EM{$person}; # Don't send email to this user
+      next if $person == $uid;
+      next if $DONE{$dkey}; # this person has already been alerted about this
+      next if !$FF{$person}; # Doesn't want to get alerts on this
+      $EMAIL{$person} .= "<table width=90% border=0 cellpadding=5 style='background-color: white;'><tr><td align=left width=45><img style='$IMSTYLE' src=http://www.turknettlabs.com/griddle_images/$pdata{'images'}></td><td align=left valign=top><p style='$PSTYLE'>$pdata{'name'} writes on <a href='http://$strip.griddle.com'>$pdata{'topic'}</a>:<br>$pdata{'message'}</p></td></tr></table><hr>\n";
+      $DONE{$dkey} = 1;
+   }
+
+   $stk = $dbh->prepare("UPDATE triggers SET email=1 WHERE tid=$tid");
+   $stk->execute;
+   $stk->finish;
+
+}
+$sth->finish;
+
+
+foreach $person (keys %EMAIL) {
+
+   %udata = &getUserData($person);
+   $RCOMMS = &getRecommendations($person);
+
+   $email = $udata{'email'};
+   $user = $udata{'username'};
+   $name = $udata{'name'};
+   open(T, "> /tmp/$user.email");
+
+   ($first) = split(/\s+/, $name);
+
+$OUT .= "
+<html lang='en'>
+  <head>
+  </head>
+<body bgcolor=#e9eaed>
+<table width=100% border=0 bgcolor=#0088cc><tr><td align=left><a href='http://www.griddle.com'><img src=http://www.griddle.com/m/img/griddle_header_logo.png></a></td></tr></table>
+<h3 style='color: #333'>Hey $first, check out what's new on Griddle:</h3>
+<table width=95% border=0 bgcolor=white style='background-color: white;'><tr><td align=left>
+";
+
+
+
+$OUT .= "$EMAIL{$person}";
+
+$OUT .= "<h3 style='color: #333'>You may also like these Grids:</h3>";
+$OUT .= "$RCOMMS";
+
+$OUT .= "</td></tr></table></body>";
+
+
+$OUT =~ s/\n//g;
+
+
+   print T $OUT;
+   close(T);
+
+   `/var/sites/turknettlabs.com/sbin/fire_email /tmp/$user.email $email "$name" "The Daily Griddle - $dstamp"`;
+
+$OUT = "";
+
+
+}
+
+
+
+sub getUserData() {
+    my($uid) = @_;
+
+    $stk = $dbh->prepare("SELECT username, name, email FROM users WHERE uid=$uid");
+    $stk->execute;
+    my($user, $name, $email) = $stk->fetchrow_array;
+    $stk->finish;
+
+    $return{"username"} = $user;
+    $return{"name"} = $name;
+    $return{"email"} = $email;
+
+    return %return;
+}
+
+
+sub getRecommendations() {
+    my($uid) = @_;
+
+    $RETURN = "";
+
+    $stk = $dbh->prepare("SELECT gid FROM recommendations WHERE uid=$uid ORDER BY rank DESC LIMIT 4");
+    $stk->execute;
+    while(($tgid) = $stk->fetchrow_array) {
+
+       $std = $dbh->prepare("SELECT topic, posts, follows FROM griddles WHERE gid=$tgid");
+       $std->execute;
+       ($topic, $posts, $follows) = $std->fetchrow_array;
+       $std->finish;
+       $strip = $topic;
+       $strip =~ s/#//g;
+
+       $RETURN .= "<table width=90% border=0 cellpadding=5 style='background-color: white;'><tr><td align=left width=45><img style='$IMSTYLE' src=http://www.turknettlabs.com/griddles/$tgid-latest.jpg></td><td align=left><a style='font-size: small;' href='http://$strip.griddle.com'>$topic</a><br><p style='font-size: small; color: #333;'> $posts Posts | $follows Following</p></td></tr></table><hr>";
+
+    }
+    $stk->finish;
+
+    return $RETURN;
+
+}
+
+
+
+sub getPostInfo() {
+    my($pid, $gid, $uid) = @_;
+
+    $stk = $dbh->prepare("SELECT message, images FROM posts WHERE pid=$pid");
+    $stk->execute;
+    ($message, $images) = $stk->fetchrow_array;
+    $stk->finish;
+
+    $stk = $dbh->prepare("SELECT name FROM users WHERE uid=$uid");
+    $stk->execute;
+    ($name) = $stk->fetchrow_array;
+    $stk->finish;
+
+    $stk = $dbh->prepare("SELECT topic FROM griddles WHERE gid=$gid");
+    $stk->execute;
+    ($topic) = $stk->fetchrow_array;
+    $stk->finish;
+
+    $return{"message"} = $message;
+    $return{"images"} = $images;
+    $return{"name"} = $name;
+    $return{"topic"} = $topic;
+
+    return %return;
+
+}
+
+
+sub getGridFollowers() {
+    my($gid) = @_;
+   
+    # Get uids that are following this grid
+ 
+    my(%return);
+
+    $stk = $dbh->prepare("SELECT uid FROM follows WHERE gid=$gid");
+    $stk->execute;
+    while(($guid) = $stk->fetchrow_array) {
+         $return{$guid} = 1;
+    }
+    $stk->execute;
+
+    return %return;
+}
+
+sub getPeopleFollowers() {
+    
+     my($uid) = @_;
+
+    # get uids that are following this person
+
+    my(%return);
+
+    $stk = $dbh->prepare("SELECT uid FROM relations WHERE target=$uid AND follower=1");
+    $stk->execute;
+    while(($ruid) = $stk->fetchrow_array) {
+         $return{$ruid} = 1;
+    }
+    $stk->execute;
+
+    return %return;
+}
+
+sub getFriendFollowers() {
+
+     my($uid) = @_;
+
+     my(%return);
+
+     $stk = $dbh->prepare("SELECT uid FROM relations WHERE target=$uid AND friend=1");
+     $stk->execute;
+     while(($ruid) = $stk->fetchrow_array) {
+         $return{$ruid} = 1;
+     }
+     $stk->execute;
+
+     return %return;
+
+}
+
+
+sub getPostFollowers() {
+    
+     my($pid) = @_;
+
+    my(%return);  
+
+    # get uids that have been involved in this post
+ 
+    $stk = $dbh->prepare("SELECT uid FROM posts WHERE pid=$pid");
+    $stk->execute;
+    while(($puid) = $stk->fetchrow_array) {
+         $return{$puid} = 1;
+    }
+    $stk->execute;
+
+    $stk = $dbh->prepare("SELECT uid FROM comments WHERE pid=$pid");
+    $stk->execute;
+    while(($puid) = $stk->fetchrow_array) {
+         $return{$puid} = 1;
+    }
+    $stk->execute;
+
+    return %return;
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
