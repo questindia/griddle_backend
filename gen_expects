@@ -10,16 +10,14 @@ $dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8do
 
 # Will need to find a more effecient way to do this but for now this will work
 
-$stk = $dbh->prepare("SELECT uid, mobile, name FROM users WHERE mobileopt=1");
+$stk = $dbh->prepare("SELECT uid, mobile, name, mobileopt FROM users");
 $stk->execute;
-while(($ouid, $mobile, $name) = $stk->fetchrow_array) {
-   $OPTIN{$ouid} = 1;
+while(($ouid, $mobile, $name, $mopt) = $stk->fetchrow_array) {
+   $OPTIN{$ouid} = $mopt;
    $MOB{$ouid} = $mobile;
    $NAMES{$ouid} = $name;
 }
 $stk->finish;
-
-
 
 
 # Get the next eid
