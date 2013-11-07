@@ -1,0 +1,69 @@
+#!/usr/bin/perl
+
+use JSON;
+use DBI;
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+
+
+$sth = $dbh->prepare("SELECT * FROM fblink WHERE do_scrape=1");
+$sth->execute;
+
+while(($UID, $FBUID, $AT, $ET) = $sth->fetchrow_array) {
+
+  $stk = $dbh->prepare("SELECT fboid FROM fb_grabs WHERE uid=$UID");
+  $stk->execute;
+  while(($FBOID) = $stk->fetchrow_array) {
+      $DONE{$FBOID} = 1;
+  }
+  $stk->finish;
+
+  $DATA = `wget https://graph.facebook.com/$FBUID/photos/uploaded?access_token=$ET -O - 2>/dev/null`;
+  $json = JSON->new;
+  $JD = $json->decode($DATA);
+
+  for ( @{$JD->{data}} ) {
+
+   $comment = $_->{name};
+   if($comment =~ /#/) {
+        $comment =~ /(.*)\s*(#.*)\s*(.*)/;
+        $fboid = $_->{id};
+        #print "FB OBJ ID - $_->{id}\n";
+        $typed_grid = $2;
+        #print "Hashtag - $2\n";
+        $message = "$1 $3 - Via Facebook";
+        #print "Everything Else: $1 $3\n";
+        $url = $_->{source};
+        #print "Source: $_->{source}\n";
+        $now = time();
+        $fn = "$now-$fboid.jpg";
+        
+        next if($DONE{$fboid});
+        
+        #get the picture
+        `wget $url -O /tmp/$fn 2>/dev/null`;
+        
+        #do the post
+        `curl -F "uid=$UID" -F "typed_grid=$typed_grid" -F "pic1=\@/tmp/$fn" -F "message=$message" -F "master=secret123" https://www.griddle.com/api/1/post.php 2>/dev/null 1>&2`;
+        
+        $stk = $dbh->prepare("INSERT INTO fb_grabs VALUES($fboid, $UID, $now, '$url', '$typed_grid', '$message')");
+        $stk->execute;
+        $stk->finish;
+         
+   }
+
+  
+  }
+
+}
+$sth->finish;
+$dbh->disconnect;
+
+
+
+#curl -F "firstName=Kris" \
+#     -F "publicKey=@idrsa.pub;type=text/plain" \
+#     echo.httpkit.com
+
+
