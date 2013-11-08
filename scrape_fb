@@ -19,7 +19,14 @@ while(($UID, $FBUID, $AT, $ET) = $sth->fetchrow_array) {
   }
   $stk->finish;
 
+  # First the easy stuff.  Grab the photos.  Unfortunately, FB treats posts with pictures attached differently and they don't show 
+  # up as photos uploaded.  Weird, needless to say.
+
   $DATA = `wget https://graph.facebook.com/$FBUID/photos/uploaded?access_token=$ET -O - 2>/dev/null`;
+  $lnow = time();
+  open(L, "> /tmp/$UID.$FBUID.$lnow.data.out");
+  print L $DATA;
+  close(L);
   $json = JSON->new;
   $JD = $json->decode($DATA);
 
@@ -52,7 +59,46 @@ while(($UID, $FBUID, $AT, $ET) = $sth->fetchrow_array) {
         $stk->finish;
          
    }
-
+  }
+   # Okay, so easy mode off.  Now we grab the entire /me/home feed, look for just records that match the user's ID, see if they're
+   # a photo, then pull the objectid out and get the photo that way.  This will apparently only get the first picture tagged which sucks.
+   # Needless to say...
+   
+   $HOME = `wget https://graph.facebook.com/$FBUID/home?access_token=$ET -O - 2>/dev/null`;
+   next if(!$HOME);
+   #print "wget https://graph.facebook.com/$FBUID/home?access_token=$ET\n";
+   #print "$HOME\n";
+   $hson = JSON->new;
+   $HD = $hson->decode($HOME);
+   
+   for( @{$HD->{data}} ) {
+       $poster = $_->{from}->{id};
+       if($poster != $FBUID) { next; }
+       $comment = $_->{message};
+       $type = $_->{type};
+       $objid = $_->{object_id};
+       next if($DONE{$objid});
+       
+       if(($comment =~ /#/) && ($type eq 'photo')) {
+          $comment =~ /(.*)\s*(#.*)\s*(.*)/;
+          $typed_grid = $2;
+          $message = "$1 $3 - Via Facebook";
+          $OBJD = `wget https://graph.facebook.com/$objid?access_token=$ET -O - 2>/dev/null`;
+          $oson = JSON->new;
+          $OD = $oson->decode($OBJD);
+          $url = $OD->{source};
+          $now = time();
+          $fn = "$now-$fboid.jpg";
+          #get the picture
+          `wget $url -O /tmp/$fn 2>/dev/null`;
+        
+          #do the post
+          `curl -F "uid=$UID" -F "typed_grid=$typed_grid" -F "pic1=\@/tmp/$fn" -F "message=$message" -F "master=secret123" https://www.griddle.com/api/1/post.php 2>/dev/null 1>&2`;
+        
+          $stk = $dbh->prepare("INSERT INTO fb_grabs VALUES($objid, $UID, $now, '$url', '$typed_grid', '$message')");
+          $stk->execute;
+          $stk->finish;
+        }
   
   }
 
