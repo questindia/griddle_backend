@@ -367,6 +367,11 @@ sub process_griddle_invite() {
     # Send the notification to this user
     system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&format=json' -q");
 
+    # Clear out any previous expects that this user had
+    $std = $dbh->prepare("UPDATE expects_bb SET status=3 WHERE uid=$uid");
+    $std->execute;
+    $std->finish;
+
     # Set an expect up for the user to respond
     $std = $dbh->prepare("INSERT INTO expects_bb VALUES(DEFAULT, $gid, $bbid, $uid, $now, 1)");
     $std->execute;
