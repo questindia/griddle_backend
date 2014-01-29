@@ -20,18 +20,11 @@ while(($ouid, $mobile, $name, $mopt) = $stk->fetchrow_array) {
 $stk->finish;
 
 
-# Get the next eid
-$stk = $dbh->prepare("SELECT eid FROM expects ORDER BY eid DESC LIMIT 1");
-$stk->execute;
-($eid) = $stk->fetchrow_array;
-$stk->finish;
-$eid++;
-
 # Find open triggers and start processing them.
-$sth = $dbh->prepare("SELECT * FROM triggers WHERE status=0");
+$sth = $dbh->prepare("SELECT * FROM triggers_bb WHERE status=0");
 $sth->execute;
 
-while(($tid, $gid, $pid, $uid, $type) = $sth->fetchrow_array) {
+while(($tid, $gid, $bbid, $uid, $type) = $sth->fetchrow_array) {
 
       &logit( "Processing triger - $tid | type - $type");
 
@@ -52,28 +45,49 @@ while(($tid, $gid, $pid, $uid, $type) = $sth->fetchrow_array) {
 
       } elsif($type == 2) { # This is a comment
 
-         # Go ahead and grab the image and the text
-         $stk = $dbh->prepare("SELECT images FROM posts WHERE pid=$pid");
-         $stk->execute;
-         ($image) = $stk->fetchrow_array;
-         $stk->finish;
+         $image = "$bbid-bb-latest.jpg";
 
-         # Hate this - need to fix
-         `ln -s /var/sites/turknettlabs.com/public/mid_images/$image /var/sites/turknettlabs.com/public/mid_images/$image.jpg`; 
-
-         $stk = $dbh->prepare("SELECT comment FROM comments WHERE pid=$pid AND uid=$uid ORDER BY din DESC LIMIT 1");
+         $stk = $dbh->prepare("SELECT comment FROM comments_bb WHERE pid=$bbid AND uid=$uid ORDER BY din DESC LIMIT 1");
          $stk->execute;
          ($message) = $stk->fetchrow_array;
          $stk->finish;
          &logit("This is a comment");
-         &process_comment($message, $image, $uid, $pid, $gid);
+         &process_comment($message, $image, $uid, $bbid, $gid);
+
+      } elsif($type == 3) { # This is an invite to contribule to a griddle(bb)
+         $stk = $dbh->prepare("SELECT colabs FROM griddle_bb WHERE bbid=$bbid AND status=0");
+         $stk->execute;
+         ($colabs) = $stk->fetchrow_array;
+         $stk->finish;
+         &logit("This is a Griddle Invite");
+         @COL = split(/,/, $colabs);
+         foreach $cuid (@COL) {
+            next if !$cuid;
+            next if $INVITEDONE{$cuid};
+            &process_griddle_invite($cuid, $bbid);
+            $INVITEDONE{$cuid} = 1;
+         }
+
+      } elsif($type == 4) { # This is a finished Griddle
+        $stk = $dbh->prepare("SELECT colabs FROM griddle_bb WHERE bbid=$bbid AND status=1");
+         $stk->execute;
+         ($colabs) = $stk->fetchrow_array;
+         $stk->finish;
+         &logit("This is a Griddle Completion");
+         @COL = split(/,/, $colabs);
+         foreach $cuid (@COL) {
+            next if !$cuid;
+            next if $COMPDONE{$cuid};
+            &process_griddle_complete($cuid, $bbid);
+            $COMPDONE{$cuid} = 1;
+         }
 
       }
 
 
       &logit( "Closing Trigger $tid");
       # Now close this trigger
-      $stk = $dbh->prepare("UPDATE triggers SET status=1 WHERE tid=$tid");
+      $stk = $dbh->prepare("UPDATE triggers_bb SET status=1 WHERE tid=$tid");
       $stk->execute;
       $stk->finish;
 
@@ -127,9 +141,9 @@ $dbh->disconnect;
 
 
 sub process_comment() {
-      my($message, $image, $uid, $pid, $gid) = @_;
+      my($message, $image, $uid, $bbid, $gid) = @_;
       
-      %followers = &getPostFollowers($pid);
+      %followers = &getPostFollowers($bbid);
 
       foreach $puid (keys %followers) {
 
@@ -159,36 +173,32 @@ sub process_comment() {
          &logit("name = $name|mobile = $mobile|message = $message|image = $image");
 
          # Send the notification to this user
-         system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&content_url=http://www.turknettlabs.com/mid_images/$image.jpg&format=json' -q");
+         system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&content_url=http://www.turknettlabs.com/griddles/$image&format=json' -q");
 
          # Clear out any previous expects that this user had
-         $std = $dbh->prepare("UPDATE expects SET status=3 WHERE uid=$puid");
+         $std = $dbh->prepare("UPDATE expects_bb SET status=3 WHERE uid=$puid");
          $std->execute;
          $std->finish;
  
          # Set an expect up for the user to respond
-         $std = $dbh->prepare("INSERT INTO expects VALUES($eid, $gid, $pid, $puid, $now, 1)");
+         $std = $dbh->prepare("INSERT INTO expects_bb VALUES(DEFAULT, $gid, $bbid, $puid, $now, 1)");
          $std->execute;
          $std->finish;
-         $eid++;
 
 
       }
-
-
-
 
 }
 
 sub getPostFollowers() {
     
-    my($pid) = @_;
+    my($bid) = @_;
 
     my(%return);  
 
     # get uids that have been involved in this post
  
-    $stk = $dbh->prepare("SELECT uid FROM posts WHERE pid=$pid");
+    $stk = $dbh->prepare("SELECT uid FROM griddle_bb WHERE bbid=$bbid");
     $stk->execute;
     while(($puid) = $stk->fetchrow_array) {
          $return{$puid} = 1;
@@ -196,7 +206,8 @@ sub getPostFollowers() {
     }
     $stk->execute;
 
-    $stk = $dbh->prepare("SELECT uid FROM comments WHERE pid=$pid");
+    $stk = $dbh->prepare("SELECT uid FROM comments_bb WHERE bbid=$bbid");
+
     $stk->execute;
     while(($puid) = $stk->fetchrow_array) {
          $return{$puid} = 1;
@@ -205,12 +216,12 @@ sub getPostFollowers() {
 
     # Get the friends of the person who posted this.
 
-    $stk = $dbh->prepare("SELECT target FROM relations WHERE friend=2 AND uid=$this_user");
-    $stk->execute;
-    while(($puid) = $stk->fetchrow_array) {
-         $return{$puid} = 1;
-    }
-    $stk->execute;
+    #$stk = $dbh->prepare("SELECT target FROM relations WHERE friend=2 AND uid=$this_user");
+    #$stk->execute;
+    #while(($puid) = $stk->fetchrow_array) {
+    #     $return{$puid} = 1;
+    #}
+    #$stk->execute;
     return %return;
 
 }
@@ -257,12 +268,12 @@ sub process_post() {
          system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&content_url=http://www.turknettlabs.com/mid_images/$image.jpg&format=json' -q");
 
          # Clear out any previous expects that this user had
-         $std = $dbh->prepare("UPDATE expects SET status=3 WHERE uid=$suid");
+         $std = $dbh->prepare("UPDATE expects_bb SET status=3 WHERE uid=$suid");
          $std->execute;
          $std->finish;
  
          # Set an expect up for the user to respond
-         $std = $dbh->prepare("INSERT INTO expects VALUES($eid, $gid, $pid, $suid, $now, 1)");
+         $std = $dbh->prepare("INSERT INTO expects_bb VALUES($eid, $gid, $bbid, $suid, $now, 1)");
          $std->execute;
          $std->finish;
          $eid++;
@@ -271,6 +282,98 @@ sub process_post() {
       $stk->finish;
 
 }
+
+sub process_griddle_complete() {
+
+    my($uid, $bbid) = @_;
+    return if !$OPTIN{$uid}; # Don't send if the user has not opted in to MMS alerts
+
+    $stv = $dbh->prepare("SELECT uid, gid FROM griddle_bb WHERE bbid=$bbid");
+    $stv->execute;
+    ($iuid, $gid) = $stv->fetchrow_array;
+    $stv->finish;
+
+    $stv = $dbh->prepare("SELECT name FROM users WHERE uid=$iuid");
+    $stv->execute;
+    ($invitor) = $stv->fetchrow_array;
+    $stv->finish;
+
+    $stv = $dbh->prepare("SELECT topic FROM griddles WHERE gid=$gid");
+    $stv->execute;
+    ($topic) = $stv->fetchrow_array;
+    $stv->finish;
+
+    $stv = $dbh->prepare("SELECT mobile FROM users WHERE uid=$uid");
+    $stv->execute;
+    ($mobile) = $stv->fetchrow_array;
+    $stv->finish;
+
+    $message = "The Griddle - $topic is complete!";
+
+    $full_message = $message;
+
+    $full_message =~ s/\s+/%20/g;
+    $full_message =~ s/'/%27/g;
+    $full_message =~ s/\n//g;
+    $full_message =~ s/#/%23/g;
+
+    $image = "$bbid-bb-latest.jpg";
+
+    &logit("Sending Griddle Invite for $topic|mobile = $mobile|message = $message|image = $image");
+    &logit("Encoded Message String = $full_message");
+
+    # Send the notification to this user
+    system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&content_url=http://www.turknettlabs.com/griddles/$image&format=json' -q");
+
+}
+
+sub process_griddle_invite() {
+
+    my($uid, $bbid) = @_;
+    return if !$OPTIN{$uid}; # Don't send if the user has not opted in to MMS alerts
+
+    $stv = $dbh->prepare("SELECT uid, gid FROM griddle_bb WHERE bbid=$bbid");
+    $stv->execute;
+    ($iuid, $gid) = $stv->fetchrow_array;
+    $stv->finish;
+
+    $stv = $dbh->prepare("SELECT name FROM users WHERE uid=$iuid");
+    $stv->execute;
+    ($invitor) = $stv->fetchrow_array;
+    $stv->finish;
+
+    $stv = $dbh->prepare("SELECT topic FROM griddles WHERE gid=$gid");
+    $stv->execute;
+    ($topic) = $stv->fetchrow_array;
+    $stv->finish;
+
+    $stv = $dbh->prepare("SELECT mobile FROM users WHERE uid=$uid");
+    $stv->execute;
+    ($mobile) = $stv->fetchrow_array;
+    $stv->finish;
+
+    $message = "$invitor wants your help to complete a Griddle - $topic - Go Online or reply to this message with Keyword Griddle and some pictures!";
+
+    $full_message = $message;
+
+    $full_message =~ s/\s+/%20/g;
+    $full_message =~ s/'/%27/g;
+    $full_message =~ s/\n//g;
+    $full_message =~ s/#/%23/g;
+
+    &logit("Sending Griddle Invite for $topic|mobile = $mobile|message = $message");
+    &logit("Encoded Message String = $full_message");
+
+    # Send the notification to this user
+    system("/usr/bin/wget 'https://api.mogreet.com/moms/transaction.send?client_id=2417&token=228b0d99be4d97d6dd9f3954475583ab&campaign_id=36877&to=$mobile&message=$full_message&format=json' -q");
+
+    # Set an expect up for the user to respond
+    $std = $dbh->prepare("INSERT INTO expects_bb VALUES(DEFAULT, $gid, $bbid, $uid, $now, 1)");
+    $std->execute;
+    $std->finish;
+}
+
+
 
 sub process_invite() {
 
@@ -375,12 +478,14 @@ sub process_list() {
 sub process_inform() {
     
     my($uid, $message) = @_;
-    
+   
+    if(!$OPTIN{$uid}) { return; }
+ 
     $stv = $dbh->prepare("SELECT mobile FROM users WHERE uid=$uid");
     $stv->execute;
     ($mobile) = $stv->fetchrow_array;
     $stv->finish;
-    
+       
     $full_message = $message;
     
     $full_message =~ s/\s+/%20/g;
