@@ -69,18 +69,18 @@ while(($tid, $gid, $bbid, $uid, $type) = $sth->fetchrow_array) {
          }
 
       } elsif($type == 4) { # This is a finished Griddle
-        $stk = $dbh->prepare("SELECT colabs FROM griddle_bb WHERE bbid=$bbid AND status=1");
-         $stk->execute;
-         ($colabs) = $stk->fetchrow_array;
-         $stk->finish;
-         &logit("This is a Griddle Completion");
-         @COL = split(/,/, $colabs);
-         foreach $cuid (@COL) {
-            next if !$cuid;
-            next if $COMPDONE{$cuid};
-            &process_griddle_complete($cuid, $bbid);
-            $COMPDONE{$cuid} = 1;
-         }
+        $stk = $dbh->prepare("SELECT uid, colabs FROM griddle_bb WHERE bbid=$bbid AND status=1");
+        $stk->execute;
+        ($colabs) = $stk->fetchrow_array;
+        $stk->finish;
+        &logit("This is a Griddle Completion");
+        @COL = split(/,/, "$uid,$colabs");
+        foreach $cuid (@COL) {
+           next if !$cuid;
+           next if $COMPDONE{$cuid};
+           &process_griddle_complete($cuid, $bbid);
+           $COMPDONE{$cuid} = 1;
+        }
 
       }
 
