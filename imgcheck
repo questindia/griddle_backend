@@ -1,0 +1,16 @@
+#!/usr/bin/perl
+
+$WANT = 3;
+
+$COUNT = `ps ax |grep imgconvertd | grep -v grep | wc -l`;
+chop $COUNT;
+
+if($COUNT < $WANT) {
+   $DIFF = $WANT - $COUNT;
+   for($i=0;$i<$DIFF;$i++) {
+     print "Going to Spawn...\n";
+     system("/usr/local/sbin/imgconvertd")
+   }
+}
+
+

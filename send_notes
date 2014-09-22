@@ -20,6 +20,21 @@ while(($nuid, $fg, $fp, $ff, $fgc, $fpc) = $stk->fetchrow_array) {
 }
 $stk->finish;
 
+$stk = $dbh->prepare("SELECT uid, emailopt FROM users");
+$stk->execute;
+while(($euid, $em) = $stk->fetchrow_array) {
+   $EMAIL{$euid} = $em;
+}
+$stk->finish;
+
+$stk = $dbh->prepare("SELECT * FROM invite_history");
+$stk->execute;
+while(($x, $iuid, $ibbid) = $stk->fetchrow_array) {
+   $idkey = "$iuid-$ibbid";
+   $IDONE{$idkey} = 1;
+}
+$stk->finish;
+
 
 # Figure out what happened = only process push=0 and type=1 (post)
 #$sth = $dbh->prepare("SELECT * FROM triggers WHERE push=0 AND type=1");
@@ -94,6 +109,7 @@ while(($tid, $gid, $bbid, $uid, $type, $din, $status) = $sth->fetchrow_array) {
       $buildmsg = "<strong>$pdata{'name'}</strong> commented <a style='color:#0088cc;' href=/m/grid.php?gid=$gid>$pdata{'topic'}</a> - $message";
 
       &do_note($person, $uid, "<strong>$pdata{'name'}</strong> commented <a style='color:#0088cc;' href=/m/grid.php?gid=$gid>$pdata{'topic'}</a> - $message", 4, $bbid, $cid);
+      &do_push($person, "$pdata{'name'} commented on a Griddle - $pdata{'topic'} - $message");
       $DONE{$dkey} = 1;
 
    }   
@@ -113,9 +129,9 @@ while(($tid, $gid, $bbid, $uid, $type, $din, $status) = $sth->fetchrow_array) {
 
    # First see who may be interested in this
 
-   $stv = $dbh->prepare("SELECT uid, colabs FROM griddle_bb WHERE bbid=$bbid AND status=0");
+   $stv = $dbh->prepare("SELECT uid, colabs, ppid, pgoal FROM griddle_bb WHERE bbid=$bbid");
    $stv->execute;
-   ($uid, $col) = $stv->fetchrow_array;
+   ($uid, $col, $ppid, $pgoal) = $stv->fetchrow_array;
    $stv->finish;
 
    @col = split(/,/, "$uid,$col");
@@ -124,20 +140,59 @@ while(($tid, $gid, $bbid, $uid, $type, $din, $status) = $sth->fetchrow_array) {
       $users{$cuid} = 1;
    }
 
+   @pids = split(/,/, $ppid);
+   $count = @pids;
+   
+   $left = ($pgoal - $count);
+      
+
    foreach $person (keys %users) {
       $dkey = "$person-$tid";
+      $bkey = "$person-$bbid";
       print "$dkey\n";
-      if($type!=4) {
+      if($type+2==5) {
          next if $person == $uid; # Don't send someone a notification about something they did
                                   # unless it's a Griddle Completion
+         next if $IDONE{$bkey};   # this person has already been alerted about this
       }
-      next if $DONE{$dkey};  # this person has already been alerted about this
+      next if $DONE{$dkey};  # this person has already been alerted about this   
       next if !$FF{$person}; # Doesn't want to get alerts on this
 
       &do_note($person, $uid, "", $type+2, $bbid, 0);
+      
+      
+      my %udata = &getUserData($uid);
+      $rname = $udata{'name'};
+      
+      
+      if($type+2==5) {
+          $pmess = "$rname wants your help to Create a Griddle.  Hurry, there are only $left spots left.";
+          $mess  = "wants your help to <a href='http://www.griddle.com/do_post.php?bbcheck=$bbid&gid=$gid&purpose=complete'> Create a Griddle.</a><br>Hurry, there are only $left spots left!";
+          $sub   = "Let's make a Griddle!";
+          $extra = ""; 
+      } elsif($type+2==6) {
+          $pmess = "A Griddle is finished.";
+          $mess  = "a Griddle just got finished!";
+          $sub   = "Your finished Griddle";
+          $extra = "<img src=http://www.griddle.com/griddles/$bbid-bb-latest.jpg>";
+          $uid   = ""; 
+      }
+      if($EMAIL{$person}) {           
+         &fire_email($person, $uid, $mess, $sub, $extra);
+      }
+      &do_push($person, $pmess);
+      
       $DONE{$dkey} = 1;
+      $fnow = time();
+      $stk = $dbh->prepare("INSERT INTO invite_history VALUES(DEFAULT, $person, $bbid, $fnow)");
+      $stk->execute;
+      $stk->finish;
 
    }
+
+  
+   
+   
 
    $stk = $dbh->prepare("UPDATE triggers_bb SET push=1 WHERE tid=$tid");
    $stk->execute;
@@ -155,11 +210,34 @@ sub do_note() {
     $note =~ s/\n//g;
     $note =~ s/\r//g;
 
+    
+
     $stk = $dbh->prepare("INSERT INTO notes_bb VALUES(DEFAULT, $target, $bbid, $cid, $sender, $type, $now, \"$note\", 1)");
     $stk->execute;
     $stk->finish;
 
     $nid++;
+}
+
+sub do_push() {
+
+    my($uid, $message) = @_;
+    $message =~ s/!/\./g;
+    
+    $stk = $dbh->prepare("SELECT apple_id FROM mobile_device WHERE uid=$uid");
+    $stk->execute;
+    ($apple_id) = $stk->fetchrow_array;
+    $stk->finish;
+    
+    if($apple_id) {
+       $stk = $dbh->prepare("SELECT COUNT(nid) FROM notes_bb WHERE uid=$uid AND status=1 AND type>1");
+       $stk->execute;
+       ($badge) = $stk->fetchrow_array;
+       $stk->finish;
+       
+       `/usr/bin/php /var/sites/turknettlabs.com/sbin/push.php $apple_id 1 "$message" 1>/dev/null 2>/dev/null`;
+    }    
+
 }
 
 
@@ -277,13 +355,17 @@ sub getPostFollowers() {
 
     # get uids that have been involved in this post
  
-    $stk = $dbh->prepare("SELECT uid FROM griddle_bb WHERE bbid=$bbid");
+    $stk = $dbh->prepare("SELECT uid, colabs FROM griddle_bb WHERE bbid=$bbid");
     $stk->execute;
-    while(($puid) = $stk->fetchrow_array) {
-         $return{$puid} = 1;
+    ($puid, $colabs) = $stk->fetchrow_array;
+    $return{$puid} = 1;
+    my @cols = split(/,/, $colabs);
+    foreach $puid (@cols) {
+       next if !$puid;
+       $return{$puid} = 1;
     }
-    $stk->execute;
-
+    $stk->finish;
+    
     $stk = $dbh->prepare("SELECT uid FROM comments_bb WHERE bbid=$bbid");
     $stk->execute;
     while(($puid) = $stk->fetchrow_array) {
@@ -295,3 +377,48 @@ sub getPostFollowers() {
 
 }
 
+sub fire_email {
+
+   my($uid, $from, $message, $sub, $extra) = @_;
+
+   %udata = &getUserData($uid);
+
+   $email = $udata{'email'};
+   $user = $udata{'username'};
+   $name = $udata{'name'};
+   
+   %fdata = &getUserData($from);
+   
+   $who = $fdata{'name'};
+   
+   open(T, "> /tmp/$user.note.email");
+
+   ($first) = split(/\s+/, $name);
+
+$OUT .= "
+<html lang='en'>
+  <head>
+  </head>
+<body bgcolor=#e9eaed>
+<table width=100% border=0 bgcolor=#0088cc><tr><td align=left><a href='http://www.griddle.com'><img height=25 style='height: 25px;' src=http://www.griddle.com/img/logo_5.png></a></td></tr></table>
+<center><table border=0 width=80%><tr><td>
+<h4 style='color: #333'>Hey $first, $who $message</h4></td></tr>
+</table>
+$extra</center>
+<br><br><br><br><br>
+<hr>
+<center><p style='font-size:xx-small;'><a href='http://www.griddle.com'>Griddle</a> | <a href='http://www.griddle.com/unsub.php?email=$email'>Unsubscribe</a></p></center>
+</body></html>
+";
+
+$OUT =~ s/\n//g;
+
+   print T $OUT;
+   close(T);
+
+   `/var/sites/turknettlabs.com/sbin/fire_email /tmp/$user.note.email $email "$name" "$sub"`;
+
+$OUT = "";
+
+
+}

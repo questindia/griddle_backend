@@ -47,7 +47,7 @@ while(($tid, $gid, $bbid, $uid, $type) = $sth->fetchrow_array) {
 
          $image = "$bbid-bb-latest.jpg";
 
-         $stk = $dbh->prepare("SELECT comment FROM comments_bb WHERE pid=$bbid AND uid=$uid ORDER BY din DESC LIMIT 1");
+         $stk = $dbh->prepare("SELECT comment FROM comments_bb WHERE bbid=$bbid AND uid=$uid ORDER BY din DESC LIMIT 1");
          $stk->execute;
          ($message) = $stk->fetchrow_array;
          $stk->finish;
@@ -192,19 +192,22 @@ sub process_comment() {
 
 sub getPostFollowers() {
     
-    my($bid) = @_;
+    my($bbid) = @_;
 
     my(%return);  
 
     # get uids that have been involved in this post
  
-    $stk = $dbh->prepare("SELECT uid FROM griddle_bb WHERE bbid=$bbid");
+    $stk = $dbh->prepare("SELECT uid, colabs FROM griddle_bb WHERE bbid=$bbid");
     $stk->execute;
-    while(($puid) = $stk->fetchrow_array) {
-         $return{$puid} = 1;
-         $this_user;
+    ($puid, $colabs) = $stk->fetchrow_array;
+    $return{$puid} = 1;
+    my @cols = split(/,/, $colabs);
+    foreach $puid (@cols) {
+       next if !$puid;
+       $return{$puid} = 1;
     }
-    $stk->execute;
+    $stk->finish;
 
     $stk = $dbh->prepare("SELECT uid FROM comments_bb WHERE bbid=$bbid");
 
@@ -332,9 +335,9 @@ sub process_griddle_invite() {
     my($uid, $bbid) = @_;
     return if !$OPTIN{$uid}; # Don't send if the user has not opted in to MMS alerts
 
-    $stv = $dbh->prepare("SELECT uid, gid FROM griddle_bb WHERE bbid=$bbid");
+    $stv = $dbh->prepare("SELECT uid, gid, ppid, pgoal FROM griddle_bb WHERE bbid=$bbid");
     $stv->execute;
-    ($iuid, $gid) = $stv->fetchrow_array;
+    ($iuid, $gid, $ppid, $pgoal) = $stv->fetchrow_array;
     $stv->finish;
 
     $stv = $dbh->prepare("SELECT name FROM users WHERE uid=$iuid");
@@ -351,8 +354,12 @@ sub process_griddle_invite() {
     $stv->execute;
     ($mobile) = $stv->fetchrow_array;
     $stv->finish;
-
-    $message = "$invitor wants your help to complete a Griddle - $topic - Go Online or reply to this message with Keyword Griddle and some pictures!";
+    
+    @pids = split(/,/, $ppid);
+    $count = @pids;
+    $left = ($pgoal - $count);
+    
+    $message = "$invitor wants your help to complete a Griddle - $topic - there are only $left spots left so go Online or reply to this message with Keyword Griddle and some pictures!";
 
     $full_message = $message;
 

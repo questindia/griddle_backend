@@ -1,0 +1,85 @@
+#!/usr/bin/perl
+
+use JSON;
+use DBI;
+
+$dbh = DBI->connect("DBI:mysql:database=griddleng:www.griddle.com", "root", "8dogson42fence");
+
+$now = time();
+
+$sth = $dbh->prepare("SELECT * FROM fblink WHERE do_scrape=1");
+$sth->execute;
+
+while(($UID, $FBUID, $AT, $ET) = $sth->fetchrow_array) {
+
+  $DATA = `wget https://graph.facebook.com/$FBUID/friends?access_token=$ET -O - 2>/dev/null`;
+  $lnow = time();
+  open(L, "> /tmp/$UID.$FBUID.friend.$lnow.data.out");
+
+  print L $DATA;
+  close(L);
+  $json = JSON->new;
+  $JD = $json->decode($DATA);
+
+  for ( @{$JD->{data}} ) {
+    $friend    = $_->{name};
+    $friendid  = $_->{id};
+
+    if(!&has_rel($UID, $friendid)) {
+        print "$UID is FB Friends with $friend $friendid\n";
+        &establish_rel($UID, $friendid);
+    }
+ 
+  }
+}
+$sth->finish;
+$dbh->disconnect;
+
+
+sub has_rel() {
+
+  my($uid, $fid) = @_;
+
+  $stk = $dbh->prepare("SELECT uid FROM fblink WHERE fbuid=$fid");
+  $stk->execute;
+  ($there) = $stk->fetchrow_array;
+  $stk->finish;
+
+  if(!$there) { return 1; }
+
+  $stk = $dbh->prepare("SELECT rid FROM relations WHERE uid=$uid AND target=$there AND friend=2");
+  $stk->execute;
+  ($rid) = $stk->fetchrow_array;
+  $stk->finish;
+
+  if($rid) { return 1; }
+
+  return 0;
+} 
+
+sub establish_rel() {
+
+  my($uid, $fid) = @_;
+
+  $stk = $dbh->prepare("SELECT uid FROM fblink WHERE fbuid=$fid");
+  $stk->execute;
+  ($there) = $stk->fetchrow_array;
+  $stk->finish;
+
+  $stk = $dbh->prepare("INSERT INTO relations VALUES(DEFAULT, $uid, 2, 0, $there, 2, $now)");
+  $stk->execute;
+  $stk->finish;
+
+  $stk = $dbh->prepare("INSERT INTO relations VALUES(DEFAULT, $there, 2, 0, $uid, 2, $now)");
+  $stk->execute;
+  $stk->finish;  
+
+}
+
+
+
+#curl -F "firstName=Kris" \
+#     -F "publicKey=@idrsa.pub;type=text/plain" \
+#     echo.httpkit.com
+
+

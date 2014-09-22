@@ -1,0 +1,76 @@
+#!/usr/bin/perl
+
+($gid) = @ARGV;
+
+
+my $pid = fork();
+if ($pid < 0) {
+    die "fork: $!";
+} elsif ($pid) {
+  exit 0;
+}
+
+use Redis;
+use Redis::List;
+
+$BASE = "/var/sites/turknettlabs.com/public";
+
+$FULL_DIR = "$BASE/full_images";
+$UPLOAD_DIR = "$BASE/griddle_images";
+$MIDSIZE_DIR = "$BASE/mid_images";
+$THUMB_DIR = "$BASE/thumb_images";
+
+$GPATH = "$BASE/griddles";
+$PATH = "$BASE/griddle_images";
+
+my $redis = Redis->new(server => 'grd-mysql-01.griddle.com:6379');
+
+open(L, ">> /tmp/bb4convert.log");
+
+while(1) {
+
+  $work = $redis->lpop("bb4.process");
+  if($work) {
+     sleep(4); # Give some time for the other thread to process the images
+     ($bbid, $filelist) = split(/\|/, $work);
+     @files = split(/,/, $filelist);
+     $now = `/bin/date`;
+     chop $now;
+     print L "$now - Processing $bbid AND $filelist\n";
+     &bbmake($bbid, @files);
+  }
+
+  sleep(1);
+
+}
+close(L);
+
+
+sub bbmake() {
+
+  my($bbid, @files) = @_;
+
+  $count = 1;
+  $row = 1;
+  foreach $file (@files) {
+    print L "bbmake() - processing $file\n";
+    $files{$row} .= " $PATH/$file";
+    $count++;
+    if($count > 2) {
+       print L "bbmake() - final for row=$row is $files{$row}\n";
+       $count = 1;
+       $row++;
+    }
+
+  }
+
+
+  `/usr/bin/convert -crop 200x200+0+0 -border 5x5 $files{1} +append $GPATH/$bbid-bb-1.jpg`;
+  `/usr/bin/convert -crop 200x200+0+0 -border 5x5 $files{2} +append $GPATH/$bbid-bb-2.jpg`;
+
+  `/usr/bin/convert $GPATH/$bbid-bb-1.jpg $GPATH/$bbid-bb-2.jpg -append $GPATH/$bbid-bb-latest.jpg`;
+  `/bin/rm $GPATH/$bbid-bb-1.jpg $GPATH/$bbid-bb-2.jpg`;
+
+  %files = ();
+
+}
